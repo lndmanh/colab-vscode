@@ -160,6 +160,9 @@ export interface VsCodeStub {
     createTreeView: sinon.SinonStubbedMember<
       typeof vscode.window.createTreeView
     >;
+    onDidChangeWindowState: sinon.SinonStubbedMember<
+      typeof vscode.window.onDidChangeWindowState
+    >;
   };
   workspace: {
     getConfiguration: sinon.SinonStubbedMember<
@@ -345,6 +348,7 @@ export function newVsCodeStub(): VsCodeStub {
         .returns({
           dispose: sinon.stub(),
         } as Partial<vscode.TreeView<unknown>> as vscode.TreeView<unknown>),
+      onDidChangeWindowState: sinon.stub(),
     },
     workspace: {
       getConfiguration: sinon.stub(),
