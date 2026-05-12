@@ -32,7 +32,10 @@ import {
   ResponseError,
 } from '../client/generated';
 import { ColabAssignedServer } from '../servers';
+import { ContentsWatcher } from './contents-watcher';
 import { JupyterConnectionManager } from './sessions';
+
+const CONTENTS_WATCHER_SETTING = 'contentsWatcher';
 
 /**
  * Defines what VS Code needs to read, write, discover and manage files and
@@ -68,6 +71,8 @@ export class ContentsFileSystemProvider
   private readonly changeEmitter: EventEmitter<FileChangeEvent[]>;
   private readonly workspaceListener: Disposable;
   private readonly connectionListener: Disposable;
+  private readonly watcher: ContentsWatcher;
+  private readonly watcherListener: Disposable;
 
   /**
    * Initializes a new instance.
@@ -81,6 +86,10 @@ export class ContentsFileSystemProvider
   ) {
     this.changeEmitter = new vs.EventEmitter<FileChangeEvent[]>();
     this.onDidChangeFile = this.changeEmitter.event;
+    this.watcher = new ContentsWatcher(vs, jupyterConnections);
+    this.watcherListener = this.watcher.onDidChangeFile((events) => {
+      this.changeEmitter.fire(events);
+    });
     this.workspaceListener = vs.workspace.onDidChangeWorkspaceFolders(
       this.dropMatchingConnection.bind(this),
     );
@@ -97,6 +106,9 @@ export class ContentsFileSystemProvider
     this.isDisposed = true;
     this.workspaceListener.dispose();
     this.connectionListener.dispose();
+    this.watcherListener.dispose();
+    this.watcher.dispose();
+    this.changeEmitter.dispose();
   }
 
   /**
@@ -132,33 +144,38 @@ export class ContentsFileSystemProvider
   }
 
   /**
-   * All calls are no-ops.
+   * Delegates to the polling contents watcher when the experiment is enabled.
    *
-   * The Jupyter Server REST API does not support watching and Colab has no
-   * socket-based implementation that can easily be used.
-   *
-   * In the future we may consider adding time-based polling to fire events for
-   * files/directories that have been `watch`-ed.
+   * The experiment is off by default while the polling watcher is validated.
    *
    * @param uri - The URI of the resource.
-   * @param _options - Configuration options for the operation.
-   * @returns A no-op disposable.
+   * @param options - Configuration options for the operation.
+   * @returns A disposable that stops this watch registration.
    */
   @traceMethod
   watch(
     uri: Uri,
-    _options: {
+    options: {
       readonly recursive: boolean;
       readonly excludes: readonly string[];
     },
   ): Disposable {
     this.guardDisposed();
     this.throwForVsCodeFile(uri);
+    if (this.isContentsWatcherEnabled()) {
+      return this.watcher.watch(uri, options);
+    }
     return {
       dispose: () => {
         // No-op
       },
     };
+  }
+
+  private isContentsWatcherEnabled(): boolean {
+    return this.vs.workspace
+      .getConfiguration('colab.experimental')
+      .get(CONTENTS_WATCHER_SETTING, false);
   }
 
   /**

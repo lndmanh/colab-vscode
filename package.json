@@ -91,6 +91,14 @@
             "experimental"
           ]
         },
+        "colab.experimental.contentsWatcher": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enables experimental polling for watched files and folders in mounted Colab filesystems.",
+          "tags": [
+            "experimental"
+          ]
+        },
         "colab.terminal": {
           "type": "boolean",
           "default": true,

@@ -7,7 +7,13 @@
 import { randomUUID } from 'crypto';
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { FileChangeEvent, Uri, WorkspaceFoldersChangeEvent } from 'vscode';
+import {
+  FileChangeEvent,
+  Uri,
+  WindowState,
+  WorkspaceConfiguration,
+  WorkspaceFoldersChangeEvent,
+} from 'vscode';
 import { Variant } from '../../colab/api';
 import { TestEventEmitter } from '../../test/helpers/events';
 import { TestUri } from '../../test/helpers/uri';
@@ -91,6 +97,8 @@ describe('ContentsFileSystemProvider', () => {
   let jupyterStub: sinon.SinonStubbedInstance<JupyterConnectionManager>;
   let workspaceEmitter: TestEventEmitter<WorkspaceFoldersChangeEvent>;
   let connectionEmitter: TestEventEmitter<string[]>;
+  let windowStateEmitter: TestEventEmitter<WindowState>;
+  let contentsWatcherEnabled: boolean;
   let fs: ContentsFileSystemProvider;
   let listener: sinon.SinonStub<[FileChangeEvent[]]>;
 
@@ -104,8 +112,17 @@ describe('ContentsFileSystemProvider', () => {
 
   beforeEach(() => {
     vs = newVsCodeStub();
+    contentsWatcherEnabled = false;
     workspaceEmitter = new TestEventEmitter();
     vs.workspace.onDidChangeWorkspaceFolders.callsFake(workspaceEmitter.event);
+    windowStateEmitter = new TestEventEmitter();
+    vs.window.onDidChangeWindowState.callsFake(windowStateEmitter.event);
+    vs.workspace.getConfiguration.withArgs('colab.experimental').returns({
+      get: sinon
+        .stub()
+        .withArgs('contentsWatcher', false)
+        .callsFake(() => contentsWatcherEnabled),
+    } as Pick<WorkspaceConfiguration, 'get'> as WorkspaceConfiguration);
     jupyterStub = sinon.createStubInstance(JupyterConnectionManager);
     connectionEmitter = new TestEventEmitter();
     // Needed to work around the property being readonly.
@@ -137,6 +154,14 @@ describe('ContentsFileSystemProvider', () => {
     fs.dispose();
 
     expect(connectionEmitter.hasListeners()).to.be.false;
+  });
+
+  it('disposes contents watcher listener when disposed', () => {
+    expect(windowStateEmitter.hasListeners()).to.be.true;
+
+    fs.dispose();
+
+    expect(windowStateEmitter.hasListeners()).to.be.false;
   });
 
   describe('onDidChangeWorkspaceFolders', () => {
@@ -348,13 +373,43 @@ describe('ContentsFileSystemProvider', () => {
       }).to.throw(/FileNotFound/);
     });
 
-    it('no-ops', () => {
+    it('no-ops while the experimental contents watcher is disabled', () => {
       expect(
         fs.watch(TestUri.parse('colab://m-s-foo/'), {
           recursive: false,
           excludes: [],
         }),
       ).to.have.property('dispose');
+      sinon.assert.notCalled(jupyterStub.get);
+    });
+
+    it('delegates to the contents watcher when enabled', async () => {
+      contentsWatcherEnabled = true;
+      const contentsStub = sinon.createStubInstance(ContentsApi);
+      jupyterStub.get.withArgs('m-s-foo').resolves(contentsStub);
+      contentsStub.get.onCall(0).resolves(FOO_CONTENT_FILE);
+      contentsStub.get.onCall(1).resolves({
+        ...FOO_CONTENT_FILE,
+        lastModified: '2025-12-11T14:35:40Z',
+      });
+
+      const clock = sinon.useFakeTimers();
+      try {
+        fs.watch(TestUri.parse('colab://m-s-foo/foo.txt'), {
+          recursive: false,
+          excludes: [],
+        });
+        await clock.tickAsync(1000 * 5);
+
+        sinon.assert.calledOnceWithExactly(listener, [
+          {
+            type: FileChangeType.Changed,
+            uri: TestUri.parse('colab://m-s-foo/foo.txt'),
+          },
+        ]);
+      } finally {
+        clock.restore();
+      }
     });
   });
 
